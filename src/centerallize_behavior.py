@@ -72,3 +72,32 @@ class BroadCastCommunication(nn.Module):
     def forward(self, z, h):
         message = torch.cat((z, h), dim=-1)
         return self.net(message)
+
+
+class CommunicationHead(nn.Module):
+    """Attention-based communication across the agent dimension."""
+    def __init__(self, hidden_dim: int = 128, latent_dim: int = 32,
+                 QK_dim: int = 64, V_dim: int = 64):
+        super().__init__()
+        self.Q = nn.Linear(latent_dim + hidden_dim, QK_dim)
+        self.K = nn.Linear(latent_dim + hidden_dim, QK_dim)
+        self.V = nn.Linear(latent_dim + hidden_dim, V_dim)
+        self.latent_dim = latent_dim + hidden_dim
+        self.QK_dim = QK_dim
+        self.V_dim = V_dim
+
+    def forward(self, z, h, return_attn=False):
+        # messages: [B, N, latent+hidden]; attention is over the agent dim N.
+        messages = torch.cat((z, h), dim=-1)
+        queries = self.Q(messages)                                   # [B, N, QK]
+        keys = torch.transpose(self.K(messages), dim0=-2, dim1=-1)   # [B, QK, N]
+        values = self.V(messages)                                    # [B, N, V]
+        # AUDIT FIX (A5): the original used floor-division `//` for the scale,
+        # which truncates the attention logits to integers BEFORE softmax,
+        # destroying all sub-integer attention structure. Use true division.
+        scores = (queries @ keys) / (self.QK_dim ** 0.5)             # [B, N, N]
+        attentions = torch.softmax(scores, dim=-1)
+        context = attentions @ values                                # [B, N, V]
+        if return_attn:
+            return context, attentions
+        return context
